@@ -24,6 +24,47 @@ using std::cout;
 
 typedef long long ll;
 
+__global__ void Convolution( long int *mat, long int *filter, long int* ans, int m, int n, int k){
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    extern __shared__ long int shared[];
+
+    int local_row = threadIdx.y + k / 2;
+    int local_col = threadIdx.x + k / 2;
+
+    long int *shared_filter = shared;
+    long int *shared_mat = shared + k * k;
+
+    if (threadIdx.y < k && threadIdx.x < k) {
+        shared_filter[threadIdx.y * k + threadIdx.x] = filter[threadIdx.y * k + threadIdx.x];
+    }
+
+    for (int i = -k / 2; i <= k / 2; ++i) {
+        for (int j = -k / 2; j <= k / 2; ++j) {
+            int r = row + i;
+            int c = col + j;
+            if (r >= 0 && r < m && c >= 0 && c < n) {
+                shared_mat[(i + k / 2) * (k + 31) + (j + k / 2)] = mat[r * n + c];
+            } else {
+                shared_mat[(i + k / 2) * (k + 31) + (j + k / 2)] = 0;
+            }
+        }
+    }
+
+    __syncthreads();
+
+    if (row < m && col < n) {
+        long int sum = 0;
+        for (int i = 0; i < k; ++i) {
+            for (int j = 0; j < k; ++j) {
+                sum += shared_mat[(local_row + i) * (k + 31) + (local_col + j)] * shared_filter[i * k + j];
+            }
+        }
+        ans[row * n + col] = sum;
+    }
+}
+
 
 int main(int argc, char** argv) {
 
@@ -52,10 +93,34 @@ int main(int argc, char** argv) {
     **/
 
     /****************************************************Start Here***********************************************************/
+
+    long int* d_h_mat;
+    long int* d_h_filter;
+    long int* d_h_ans;
+
+    dim3 threadsPerBlock(32, 32);
+    dim3 blocksPerGrid(ceil(n / 32.0), ceil(m / 32.0));
+
+    int shared_mem_size = (k * k + (k + 31)*(k + 31)*sizeof(long int));
+
+    cudaMalloc(&d_h_mat, m*n*sizeof(long int));
+    cudaMemcpy(d_h_mat, h_mat, m*n*sizeof(long int), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_h_filter, k*k*sizeof(long int));
+    cudaMemcpy(d_h_filter, h_filter, k*k*sizeof(long int), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_h_ans, m*n*sizeof(long int));
     
     auto start = std::chrono::high_resolution_clock::now();//keep it just before the kernel launch
 
+    Convolution<<< blocksPerGrid, threadsPerBlock >>>(d_h_mat, d_h_filter, d_h_ans, m, n, k);
+    cudaDeviceSynchronize(); 
+
     auto end = std::chrono::high_resolution_clock::now();//keep it just after the kernel launch
+
+    cudaMemcpy(h_ans, d_h_ans, m*n*sizeof(long int), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_h_mat);
+    cudaFree(d_h_filter);
+    cudaFree(d_h_ans);
     
     
     
