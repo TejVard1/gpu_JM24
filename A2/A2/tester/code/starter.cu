@@ -34,6 +34,12 @@ __global__ void Convolution(long int* mat, long int* filter, long int* ans, int 
         s_filter[threadIdx.x] = filter[threadIdx.x];
     }
 
+    if(k*k >= 1024) {
+        for(int i=1024; i<k*k; i++){
+            s_filter[i] = filter[i];
+        }
+    }
+
     __syncthreads();
 
     // Perform the convolution operation
