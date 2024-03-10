@@ -24,45 +24,33 @@ using std::cout;
 
 typedef long long ll;
 
-__global__ void Convolution( long int *mat, long int *filter, long int* ans, int m, int n, int k){
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void Convolution(long int* mat, long int* filter, long int* ans, int m, int n, int k) {
 
-    extern __shared__ long int shared[];
+    int global_id = 1024* blockIdx.x + threadIdx.x;
 
-    int local_row = threadIdx.y + k / 2;
-    int local_col = threadIdx.x + k / 2;
+    extern __shared__ long int s_filter[];
 
-    long int *shared_filter = shared;
-    long int *shared_mat = shared + k * k;
-
-    if (threadIdx.y < k && threadIdx.x < k) {
-        shared_filter[threadIdx.y * k + threadIdx.x] = filter[threadIdx.y * k + threadIdx.x];
-    }
-
-    for (int i = -k / 2; i <= k / 2; ++i) {
-        for (int j = -k / 2; j <= k / 2; ++j) {
-            int r = row + i;
-            int c = col + j;
-            if (r >= 0 && r < m && c >= 0 && c < n) {
-                shared_mat[(i + k / 2) * (k + 31) + (j + k / 2)] = mat[r * n + c];
-            } else {
-                shared_mat[(i + k / 2) * (k + 31) + (j + k / 2)] = 0;
-            }
-        }
+    if(threadIdx.x < k*k) {
+        s_filter[threadIdx.x] = filter[threadIdx.x];
     }
 
     __syncthreads();
 
-    if (row < m && col < n) {
-        long int sum = 0;
-        for (int i = 0; i < k; ++i) {
-            for (int j = 0; j < k; ++j) {
-                sum += shared_mat[(local_row + i) * (k + 31) + (local_col + j)] * shared_filter[i * k + j];
+    // Perform the convolution operation
+    int sum = 0;
+    for(int i=0; i<k; i++){
+        for(int j=0; j<k; j++){
+            int row = global_id / n + i - k/2;
+            int col = global_id % n + j - k/2;
+            if(row >= 0 && row < m && col >= 0 && col < n) {
+                sum += mat[row*n + col] * s_filter[i * k + j];
             }
         }
-        ans[row * n + col] = sum;
     }
+    if(global_id < m*n) {
+        ans[global_id] = sum;
+    }
+    __syncthreads();
 }
 
 
@@ -98,10 +86,10 @@ int main(int argc, char** argv) {
     long int* d_h_filter;
     long int* d_h_ans;
 
-    dim3 threadsPerBlock(32, 32);
-    dim3 blocksPerGrid(ceil(n / 32.0), ceil(m / 32.0));
+    dim3 threadsPerBlock(1024, 1, 1);
+    dim3 blocksPerGrid(ceil((m*n) / 1024.0), 1, 1);
 
-    int shared_mem_size = (k * k + (k + 31)*(k + 31)*sizeof(long int));
+    int shared_mem_size = (k * k)* sizeof(long int);
 
     cudaMalloc(&d_h_mat, m*n*sizeof(long int));
     cudaMemcpy(d_h_mat, h_mat, m*n*sizeof(long int), cudaMemcpyHostToDevice);
@@ -111,7 +99,7 @@ int main(int argc, char** argv) {
     
     auto start = std::chrono::high_resolution_clock::now();//keep it just before the kernel launch
 
-    Convolution<<< blocksPerGrid, threadsPerBlock >>>(d_h_mat, d_h_filter, d_h_ans, m, n, k);
+    Convolution<<< blocksPerGrid, threadsPerBlock, shared_mem_size >>>(d_h_mat, d_h_filter, d_h_ans, m, n, k);
     cudaDeviceSynchronize(); 
 
     auto end = std::chrono::high_resolution_clock::now();//keep it just after the kernel launch
